@@ -12,9 +12,10 @@
 </head>
 <body>
 <header><h1 id="title">היום</h1><span id="sub"></span></header>
-<main id="main"></main>
+<main id="main">טוען...</main>
 <nav id="nav"></nav>
 <div id="toast" role="status" aria-live="polite"></div>
+<script>window.addEventListener('error',function(e){var m=document.getElementById('main');if(m)m.textContent='שגיאה: '+(e.message||'')+' (שורה '+(e.lineno||'?')+')'});</script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -24,7 +24,8 @@ function openDB() {
   return new Promise((res, rej) => {
     const r = indexedDB.open('bizdb', 2);
     r.onupgradeneeded = () => { const d = r.result; ['shifts', 'expenses', 'invoices', 'custom', 'moves'].forEach(s => { if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: 'id', autoIncrement: true }); }); if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv'); };
-    r.onsuccess = () => { _db = r.result; res(); };
+    r.onsuccess = () => { _db = r.result; _db.onversionchange = () => { _db.close(); location.reload(); }; res(); };
+    r.onblocked = () => { const m = document.getElementById('main'); if (m) m.textContent = 'האפליקציה פתוחה גם בחלון אחר. סגור אותה לגמרי ופתח מחדש.'; };
     r.onerror = () => rej(r.error);
   });
 }
@@ -556,7 +557,7 @@ document.addEventListener('click', e => {
 document.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-act]')) { e.preventDefault(); act(e.target.dataset.act, e.target); } });
 document.addEventListener('change', e => { if (e.target.id === 'imp' && e.target.files[0]) importBackup(e.target.files[0]); });
 (async () => {
-  await openDB(); await load(); render();
+  try { await openDB(); await load(); render(); } catch (err) { const m = document.getElementById('main'); m.textContent = 'שגיאה בטעינה: ' + (err && err.message || err) + '. אפשר לנסות לסגור ולפתוח מחדש.'; return; }
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => { });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 })();

@@ -117,14 +117,14 @@ const GUIDES = {
   adv: ['לבדוק באזור האישי באתר רשות המסים מה הסכום והמועד של מקדמת מס ההכנסה שנקבעה לך.', 'לשלם דרך האתר, אפליקציית הבנק או כרטיס אשראי.', 'לשמור אסמכתא בתיקיית החודש, לתעד את התשלום במסך "כסף", ולסמן כאן "בוצע".', 'אם ההכנסה שלך שונה מאוד ממה שהוערך, לדבר עם רואה החשבון על עדכון המקדמות.'],
   bl: ['לבדוק באתר הביטוח הלאומי, באזור האישי, את הסכום והמועד של דמי הביטוח כעצמאי.', 'לשלם דרך האתר, הבנק או בהוראת קבע.', 'לשמור אסמכתא, לתעד את התשלום במסך "כסף", ולסמן כאן "בוצע".', 'אם יש שינוי במצבך (אבטלה, חזרה לעבודה כשכיר), לדווח על כך לביטוח הלאומי.'],
   hrs: ['לסכם את שעות החודש לפי היומן.', 'לשלוח את הסיכום למנהל המרפאה לאישור, ועדיף בכתב.', 'לסמן באפליקציה "אושר" ליד השעות שאושרו.', 'לשמור את האישור. התשלום תלוי בו.'],
-  pay: ['לבדוק שהתשלום נכנס לחשבון העסק.', 'להשוות לפירוט שכללית שלחה על חישוב התמורה.', 'להוציא חשבונית מס כדין בתוכנת החשבוניות, תוך שבועיים מקבלת התשלום (לפי ההסכם).', 'לתעד באפליקציה במסך "חשבוניות" ולשמור עותק PDF.', 'אם הסכום שונה ממה שצפית, להגיש השגה להנהלת המחוז בכתב תוך 180 יום.'],
+  pay: ['לבדוק שהתשלום נכנס לחשבון העסק.', 'להשוות לפירוט שכללית שלחה על חישוב התמורה.', 'להוציא חשבונית מס כדין ב-Summit, תוך שבועיים מקבלת התשלום (לפי ההסכם). הנתונים מוכנים להעתקה במסך "כסף".', 'לתעד באפליקציה במסך "כסף" ולשמור עותק PDF.', 'אם הסכום שונה ממה שצפית, להגיש השגה להנהלת המחוז בכתב תוך 180 יום.'],
   ann: ['הדוח השנתי למס הכנסה נעשה עם רואה החשבון.', 'להעביר לו את הייצוא של השנה (יומן שעות, חשבוניות, הוצאות עם תמונות) ואישור ניכוי מס במקור מכללית.', 'לשאול על הוצאות שנשארו פתוחות (רכב, חדר בבית).'],
   bak: ['לפתוח "הגדרות" ולהקיש "ייצוא גיבוי".', 'לשמור את הקובץ בענן או במחשב. כך הנתונים שלך לא נעלמים אם הטלפון אובד.']
 };
 const LINKS = {
   tax: ['רשות המסים (אזור אישי ודיווחים)', 'https://www.misim.gov.il/'],
   bl: ['ביטוח לאומי', 'https://www.btl.gov.il/'],
-  inv: ['חשבונית ירוקה (הוצאת חשבוניות)', 'https://www.greeninvoice.co.il/']
+  inv: ['חשבונית ירוקה (אפשרות אחרת להוצאת חשבוניות)', 'https://www.greeninvoice.co.il/']
 };
 const GUIDE_LINKS = { vat: ['tax'], adv: ['tax'], bl: ['bl'], pay: ['inv'], ann: ['tax'] };
 const linkBtn = k => `<a class="btn sec" style="display:block;text-align:center;text-decoration:none;margin:6px 0" href="${LINKS[k][1]}" target="_blank" rel="noopener noreferrer">${LINKS[k][0]} ↗</a>`;
@@ -384,13 +384,26 @@ function cashCard() {
   <button class="btn" data-act="newMove" style="width:100%">+ תיעוד העברה או תשלום</button>
   ${last.length ? `<div style="margin-top:8px">${last.map(m => `<div class="item"><div class="l"><b>${MOVE_TYPES[m.type]}</b><div class="mut">${fmtDate(m.date)} ${esc(m.note || '')}</div></div><div class="r"><b>${money(m.amount)}</b><div><button class="btn danger sm" data-act="delMove" data-id="${m.id}">מחק</button></div></div></div>`).join('')}</div>` : ''}</div>`;
 }
+function summitLink() {
+  const u = (D.st.summitUrl || '').trim();
+  return u.startsWith('https://') ? `<a class="btn sec" style="display:block;text-align:center;text-decoration:none;margin:6px 0" href="${esc(u)}" target="_blank" rel="noopener noreferrer">פתח את Summit ↗</a>` : '<div class="mut">אפשר להוסיף כפתור לפתיחת Summit: ב"עוד", בשדה "קישור ל-Summit".</div>';
+}
+function invCard(k, mc) {
+  const desc = `שירותי רפואה ${mLabel(k)}, ${r2(mc.hApproved)} שעות`;
+  return `<div class="card"><h2>חשבונית ל-Summit: ${mLabel(k)}</h2>
+  <div class="copy"><span>תיאור</span><span>${esc(desc)} <button class="btn sec sm" data-act="copy" data-id="${esc(desc)}">העתק</button></span></div>
+  ${copyRow('נטו לפני מע"מ', mc.net)}${copyRow('מע"מ ' + D.st.vat + '%', mc.vat)}${copyRow('סה"כ כולל מע"מ', mc.total)}
+  <div class="note warn">אלה הסכומים הצפויים. הסכום בחשבונית צריך להיות לפי הפירוט שכללית שולחת. אם רואה החשבון יקבע שהמע"מ חל על הסכום ברוטו, הסכומים ישתנו.</div>
+  <ol class="steps"><li>לוודא שהכסף נכנס לחשבון העסק, ושהסכום מתאים לפירוט של כללית.</li><li>להיכנס ל-Summit ולפתוח חשבונית מס חדשה ללקוח כללית.</li><li>להעתיק לשם את התיאור והסכומים מכאן, ולהתאים לסכום האמיתי.</li><li>לבדוק שמופיע מספר הקצאה בחשבונית אם הסכום לפני מע"מ מעל 5,000 ₪.</li><li>לשמור או לשלוח את החשבונית. ההסכם דורש להוציא אותה תוך שבועיים מקבלת התשלום.</li><li>לחזור לכאן וללחוץ "תיעוד חשבונית שהוצאתי", עם המספר שקיבלת מ-Summit.</li></ol>
+  ${summitLink()}<button class="btn" data-act="invFor" data-id="${k}" style="width:100%">תיעדתי ב-Summit, להמשיך לתיעוד</button></div>`;
+}
 function viewInv() {
   if (S.form && S.form.kind === 'inv') return invForm(S.form.data);
   if (S.form && S.form.kind === 'move') return moveForm();
   const list = [...D.invoices].sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate));
   const pend = [];
   for (let i = -6; i <= 0; i++) { const k = addMonths(todayStr().slice(0, 7), i), mc = monthCalc(k); if (!mc.inv && (mc.hApproved > 0)) pend.push([k, mc]); }
-  return cashCard() + `<button class="btn" data-act="newInv" style="width:100%;margin-bottom:12px">+ תיעוד חשבונית שהוצאתי</button>
+  return cashCard() + pend.slice(-2).map(([k, mc]) => invCard(k, mc)).join('') + `<button class="btn" data-act="newInv" style="width:100%;margin-bottom:12px">+ תיעוד חשבונית שהוצאתי</button>
   ${pend.length ? `<div class="card"><h2>עוד לא הוצאת חשבונית</h2>${pend.map(([k, mc]) => `<div class="item"><div class="l"><b>${mLabel(k)}</b><div class="mut">צפוי ${money(mc.net)} + מע"מ · תשלום ב-${fmtDate(mc.pay)}</div></div><div class="r"><button class="btn sec sm" data-act="invFor" data-id="${k}">תעד</button></div></div>`).join('')}</div>` : ''}
   <div class="card"><h2>חשבוניות שהוצאתי</h2>${list.length ? list.map(i => `<div class="item" data-act="editInv" data-id="${i.id}" role="button" tabindex="0"><div class="l"><b>${i.invoiceNo ? 'מס׳ ' + esc(i.invoiceNo) : 'חשבונית'}</b><div class="mut">${mLabel(i.forMonth)} · ${fmtDate(i.invoiceDate)}</div></div><div class="r"><b>${money(i.net * (1 + D.st.vat / 100))}</b><div class="mut">נטו ${money(i.net)}</div>${(() => { const ex = monthCalc(i.forMonth).net, df = i.net - ex; return ex > 0 && Math.abs(df) > 0.5 ? `<span class="pill warn">שונה מהצפוי ב-${money(df)}</span>` : ''; })()}</div></div>`).join('') : '<p class="mut">עדיין אין.</p>'}</div>
   <div class="note">החשבונית עצמה מוצאת בתוכנת חשבוניות מוכרת, כי היא חייבת לכלול מספר הקצאה ופרטים לפי החוק. כאן מתעדים אותה כדי שהמע"מ יחושב.</div>`;
@@ -428,6 +441,7 @@ function viewSet() {
   <div class="card"><h2>דיווחים</h2><label for="s_vatPeriod">תדירות דיווח מע"מ</label><select id="s_vatPeriod"><option value="1" ${s.vatPeriod === 1 ? 'selected' : ''}>חודשי</option><option value="2" ${s.vatPeriod === 2 ? 'selected' : ''}>דו-חודשי</option></select>
   <label for="s_vatStart">בדו-חודשי: החודש הראשון בכל תקופה</label><select id="s_vatStart"><option value="1" ${s.vatStart === 1 ? 'selected' : ''}>ינואר-פברואר, מרץ-אפריל...</option><option value="2" ${s.vatStart === 2 ? 'selected' : ''}>פברואר-מרץ, אפריל-מאי...</option></select>
   ${f('vatDay', 'יום בחודש להגשת מע"מ (לאמת)', s.vatDay)}${f('advDay', 'יום בחודש למקדמות מס הכנסה (לאמת)', s.advDay)}${f('blDay', 'יום בחודש לביטוח לאומי (לאמת)', s.blDay)}
+  <label for="s_summitUrl">קישור ל-Summit שלך (כתובת https שאתה מתחבר אליה)</label><input id="s_summitUrl" value="${esc(s.summitUrl || '')}" placeholder="https://...">
   <label for="s_annual">מועד הדוח השנתי (חודש-יום, לאמת)</label><input id="s_annual" value="${s.annual}">
   <div class="note warn">כל התאריכים כאן הם ברירת מחדל שלי, ולא מועדים רשמיים. לאמת באתר רשות המסים ואצל רואה החשבון.</div></div>
   <button class="btn" data-act="saveSet" style="width:100%;margin-bottom:12px">שמור הגדרות</button>
@@ -493,7 +507,7 @@ async function act(a, el) {
     case 'saveSet': {
       const n = { ...D.st };
       ['rate', 'ovh', 'vat', 'credit', 'setAside', 'buffer', 'vatDay', 'advDay', 'blDay'].forEach(k => n[k] = num(val('s_' + k)));
-      n.vatPeriod = Number(val('s_vatPeriod')); n.vatStart = Number(val('s_vatStart')); n.annual = val('s_annual');
+      n.vatPeriod = Number(val('s_vatPeriod')); n.vatStart = Number(val('s_vatStart')); n.annual = val('s_annual'); n.summitUrl = val('s_summitUrl').trim();
       D.st = n; await kvSet('settings', n); S.rep = null; toast('נשמר'); break;
     }
     case 'export': await exportBackup(); return;

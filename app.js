@@ -76,7 +76,9 @@ function monthCalc(key) {
   const recog = ex.reduce((a, e) => a + expCalc(e).recog, 0);
   const inVat = ex.reduce((a, e) => a + expCalc(e).rec, 0);
   const setAside = Math.max(0, net - recog) * st.setAside / 100;
-  return { hApproved, hPending, hOral, oralNet, gross, ovh, net, vat, total: net + vat, recog, inVat, setAside, pay: addDays(endOfMonth(key), st.credit), inv: D.invoices.find(i => i.forMonth === key) };
+  const cost = ex.reduce((a, e) => a + (e.total || 0) - expCalc(e).rec, 0);
+  const left = net - cost - setAside;
+  return { cost, left, hApproved, hPending, hOral, oralNet, gross, ovh, net, vat, total: net + vat, recog, inVat, setAside, pay: addDays(endOfMonth(key), st.credit), inv: D.invoices.find(i => i.forMonth === key) };
 }
 function periodMonths(key) {
   const st = D.st;
@@ -102,9 +104,16 @@ const GUIDES = {
   bl: ['לבדוק באתר הביטוח הלאומי, באזור האישי, את הסכום והמועד של דמי הביטוח כעצמאי.', 'לשלם דרך האתר, הבנק או בהוראת קבע.', 'לשמור אסמכתא ולסמן כאן "בוצע".', 'אם יש שינוי במצבך (אבטלה, חזרה לעבודה כשכיר), לדווח על כך לביטוח הלאומי.'],
   hrs: ['לסכם את שעות החודש לפי היומן.', 'לשלוח את הסיכום למנהל המרפאה לאישור, ועדיף בכתב.', 'לסמן באפליקציה "אושר" ליד השעות שאושרו.', 'לשמור את האישור. התשלום תלוי בו.'],
   pay: ['לבדוק שהתשלום נכנס לחשבון העסק.', 'להשוות לפירוט שכללית שלחה על חישוב התמורה.', 'להוציא חשבונית מס כדין בתוכנת החשבוניות, תוך שבועיים מקבלת התשלום (לפי ההסכם).', 'לתעד באפליקציה במסך "חשבוניות" ולשמור עותק PDF.', 'אם הסכום שונה ממה שצפית, להגיש השגה להנהלת המחוז בכתב תוך 180 יום.'],
-  ann: ['הדוח השנתי למס הכנסה נעשה עם רואה החשבון.', 'להעביר לו את הייצוא של השנה (יומן שעות, חשבוניות, הוצאות עם תמונות) ואישור ניכוי מס במקור מכללית.', 'לשאול על פנסיה, קרן השתלמות והוצאות שנשארו פתוחות.'],
+  ann: ['הדוח השנתי למס הכנסה נעשה עם רואה החשבון.', 'להעביר לו את הייצוא של השנה (יומן שעות, חשבוניות, הוצאות עם תמונות) ואישור ניכוי מס במקור מכללית.', 'לשאול על הוצאות שנשארו פתוחות (רכב, חדר בבית).'],
   bak: ['לפתוח "הגדרות" ולהקיש "ייצוא גיבוי".', 'לשמור את הקובץ בענן או במחשב. כך הנתונים שלך לא נעלמים אם הטלפון אובד.']
 };
+const LINKS = {
+  tax: ['רשות המסים (אזור אישי ודיווחים)', 'https://www.misim.gov.il/'],
+  bl: ['ביטוח לאומי', 'https://www.btl.gov.il/'],
+  inv: ['חשבונית ירוקה (הוצאת חשבוניות)', 'https://www.greeninvoice.co.il/']
+};
+const GUIDE_LINKS = { vat: ['tax'], adv: ['tax'], bl: ['bl'], pay: ['inv'], ann: ['tax'] };
+const linkBtn = k => `<a class="btn sec" style="display:block;text-align:center;text-decoration:none;margin:6px 0" href="${LINKS[k][1]}" target="_blank" rel="noopener noreferrer">${LINKS[k][0]} ↗</a>`;
 const KIND = { vat: 'דיווח מע"מ', adv: 'תשלום מקדמת מס הכנסה', bl: 'תשלום ביטוח לאומי', hrs: 'אישור שעות', pay: 'בדיקת תשלום והוצאת חשבונית', ann: 'דוח שנתי', bak: 'גיבוי' };
 
 function upcoming(from, months = 14) {
@@ -228,7 +237,11 @@ function viewHome() {
   </div>
   <div class="card"><h2>${mLabel(t.slice(0, 7))} עד עכשיו</h2>
     <div class="row"><div><div class="mut">שעות מאושרות</div><div class="big">${r2(mc.hApproved)}</div></div><div><div class="mut">ממתינות לאישור</div><div class="big">${r2(mc.hPending)}</div></div></div>
-    <div class="mut" style="margin-top:8px">צפוי נטו לפני מע"מ: <b>${money(mc.net)}</b> · תשלום משוער ב-${fmtDate(mc.pay)}</div>
+    <table style="margin-top:8px"><tr><td>אחרי תקורה, לפני מע"מ</td><td class="n">${money(mc.net)}</td></tr>
+    <tr><td>פחות הוצאות העסק (בפועל)</td><td class="n">${money(-mc.cost)}</td></tr>
+    <tr><td>פחות הפרשה למס וביטוח לאומי (הערכה)</td><td class="n">${money(-mc.setAside)}</td></tr>
+    <tr><td><b>נשאר לך (הערכה)</b></td><td class="n"><b>${money(mc.left)}</b></td></tr></table>
+    <div class="mut">מע"מ שאתה גובה אינו מופיע כאן, כי הוא לא שלך. תשלום משוער ב-${fmtDate(mc.pay)}.</div>
     ${mc.hOral ? `<div class="mut" style="margin-top:6px">בנוסף, <b>${r2(mc.hOral)} שעות</b> נסיעה/ברצף שלא אושרו בכתב (פוטנציאל כ-${money(mc.oralNet)})</div>` : ''}</div>
   ${unapproved ? `<div class="note warn">יש ${unapproved} משמרות ללא אישור מהמנהל מלפני יותר משלושה ימים. כדאי לבקש אישור.</div>` : ''}
   <div class="card"><h2>מה לעשות בקרוב</h2>${evHtml}</div>
@@ -349,6 +362,7 @@ function viewRep() {
   if (S.guide) {
     const g = GUIDES[S.guide.kind] || [], ev = S.guide;
     return `<button class="btn sec sm" data-act="back">‹ חזרה</button><div class="card" style="margin-top:10px"><h2>${esc(ev.title || KIND[ev.kind])}</h2><ol class="steps">${g.map(s => `<li>${esc(s)}</li>`).join('')}</ol>
+    ${(GUIDE_LINKS[ev.kind] || []).map(linkBtn).join('')}
     ${ev.id ? `<button class="btn" data-act="done" data-id="${esc(ev.id)}">${D.done[ev.id] ? 'בוצע ✓ (בטל)' : 'סמן כבוצע'}</button>` : ''}</div>
     <div class="note warn">ההוראות כלליות. שמות הטפסים ותאריכי היעד צריכים אימות מול רשות המסים, הביטוח הלאומי ורואה החשבון.</div>`;
   }
@@ -360,6 +374,7 @@ function viewRep() {
   <div class="copy"><b>${r.payable >= 0 ? 'מע"מ לתשלום' : 'מע"מ להחזר'}</b><b class="big">${money(Math.abs(r.payable))}</b></div>
   ${r.n === 0 ? '<div class="note">אין חשבוניות בתקופה. לפי הנחיות הרשות מגישים דוח אפס. כדאי לאמת זאת עם רואה החשבון.</div>' : ''}
   <button class="btn" data-act="guide" data-kind="vat" data-id="vat-${per[0]}" style="width:100%;margin-top:8px">איך מגישים</button></div>
+  <div class="card"><h2>קישורים מהירים</h2>${['tax', 'bl', 'inv'].map(linkBtn).join('')}<div class="mut">הקישורים פותחים את האתרים הרשמיים. את ההתחברות עושים שם בעצמך.</div></div>
   <div class="card"><h2>לוח מועדים</h2>${list.map(e => { const d = daysBetween(t, e.date); return `<div class="item"><div class="l"><b>${esc(e.title)}</b><div class="mut">${fmtDate(e.date)}</div></div><div class="r">${D.done[e.id] ? '<span class="pill ok">בוצע</span>' : `<span class="pill ${d < 0 ? 'bad' : d <= 3 ? 'warn' : ''}">${d < 0 ? 'איחור' : d + ' ימים'}</span>`}<div><button class="btn sec sm" data-act="guide" data-id="${esc(e.id)}">איך</button></div></div></div>`; }).join('')}</div>
   <div class="card"><h2>תזכורות ביומן הטלפון</h2><p class="mut">מייצא את כל המועדים עם התראה 3 ימים ויום לפני. פותחים את הקובץ בטלפון ומאשרים הוספה ליומן.</p><button class="btn acc" data-act="ics" style="width:100%">ייצוא ליומן</button>
   <label>תזכורת משלי</label><input id="cu_t" placeholder="למשל: לבדוק קרן השתלמות"><input type="date" id="cu_d" style="margin-top:6px"><button class="btn sec" data-act="addCustom" style="margin-top:6px">הוסף</button></div>`;

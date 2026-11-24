@@ -22,8 +22,8 @@ function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('o
 let _db;
 function openDB() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open('bizdb', 1);
-    r.onupgradeneeded = () => { const d = r.result; ['shifts', 'expenses', 'invoices', 'custom'].forEach(s => d.createObjectStore(s, { keyPath: 'id', autoIncrement: true })); d.createObjectStore('kv'); };
+    const r = indexedDB.open('bizdb', 2);
+    r.onupgradeneeded = () => { const d = r.result; ['shifts', 'expenses', 'invoices', 'custom', 'moves'].forEach(s => { if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: 'id', autoIncrement: true }); }); if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv'); };
     r.onsuccess = () => { _db = r.result; res(); };
     r.onerror = () => rej(r.error);
   });
@@ -36,10 +36,11 @@ const dbDel = (s, id) => rq(tx(s, 'readwrite').delete(id));
 const kvGet = async (k, d) => { const v = await rq(tx('kv').get(k)); return v === undefined ? d : v; };
 const kvSet = (k, v) => rq(tx('kv', 'readwrite').put(v, k));
 
-const DEF = { rate: 200, ovh: 15, vat: 18, credit: 45, setAside: 30, vatPeriod: 2, vatStart: 1, vatDay: 15, advDay: 15, blDay: 15, annual: '04-30' };
-const D = { shifts: [], expenses: [], invoices: [], custom: [], st: { ...DEF }, active: null, done: {}, lastBackup: null };
+const DEF = { buffer: 0, rate: 200, ovh: 15, vat: 18, credit: 45, setAside: 30, vatPeriod: 2, vatStart: 1, vatDay: 15, advDay: 15, blDay: 15, annual: '04-30' };
+const D = { shifts: [], expenses: [], invoices: [], custom: [], moves: [], st: { ...DEF }, active: null, done: {}, lastBackup: null, bank: null };
 async function load() {
-  for (const s of ['shifts', 'expenses', 'invoices', 'custom']) D[s] = await dbAll(s);
+  for (const s of ['shifts', 'expenses', 'invoices', 'custom', 'moves']) D[s] = await dbAll(s);
+  D.bank = await kvGet('bank', null);
   D.st = { ...DEF, ...(await kvGet('settings', {})) };
   D.active = await kvGet('active', null);
   D.done = await kvGet('done', {});
@@ -80,6 +81,19 @@ function monthCalc(key) {
   const left = net - cost - setAside;
   return { cost, left, hApproved, hPending, hOral, oralNet, gross, ovh, net, vat, total: net + vat, recog, inVat, setAside, pay: addDays(endOfMonth(key), st.credit), inv: D.invoices.find(i => i.forMonth === key) };
 }
+const MOVE_TYPES = { draw: 'העברה לחשבון הפרטי שלי', vat: 'תשלום מע"מ', tax: 'תשלום מקדמת מס הכנסה', bl: 'תשלום ביטוח לאומי', dep: 'הפקדה לחשבון העסק' };
+function cashCalc() {
+  const st = D.st, sum = (a, f) => a.reduce((x, i) => x + f(i), 0), mv = t => sum(D.moves.filter(m => m.type === t), m => m.amount);
+  const cashIn = sum(D.invoices.filter(i => i.paidDate), i => i.net * (1 + st.vat / 100));
+  const expOut = sum(D.expenses.filter(e => e.fromBiz !== false), e => e.total || 0);
+  const computed = cashIn - expOut - mv('vat') - mv('tax') - mv('bl') - mv('draw') + mv('dep');
+  const balance = D.bank != null ? D.bank.amount : computed;
+  const vatOwed = Math.max(0, sum(D.invoices, i => i.net * st.vat / 100) - sum(D.expenses, e => expCalc(e).rec) - mv('vat'));
+  const profit = Math.max(0, sum(D.invoices, i => i.net) - sum(D.expenses, e => expCalc(e).recog));
+  const taxRes = Math.max(0, profit * st.setAside / 100 - mv('tax') - mv('bl'));
+  const can = Math.max(0, balance - vatOwed - taxRes - st.buffer);
+  return { computed, balance, vatOwed, taxRes, can, hasBank: D.bank != null };
+}
 function periodMonths(key) {
   const st = D.st;
   if (st.vatPeriod === 1) return [key];
@@ -99,9 +113,9 @@ function vatReport(months) {
 
 /* ---------- מדריכים ---------- */
 const GUIDES = {
-  vat: ['לוודא שכל החשבוניות שהוצאת ושכל חשבוניות ההוצאות של התקופה הוזנו באפליקציה.', 'במסך "דיווחים" לבחור את התקופה. המספרים מוכנים שם להעתקה.', 'להיכנס לאתר רשות המסים, לאזור האישי של העוסק, ולדיווח מע"מ מקוון. בפעם הראשונה כדאי לעשות זאת יחד עם רואה החשבון.', 'להזין: עסקאות חייבות (נטו), מע"מ עסקאות, ותשומות (נטו ומע"מ). שמות השדות בטופס עשויים להיות מעט שונים.', 'אם לא היו עסקאות בתקופה, מגישים "דוח אפס" ולא מדלגים.', 'אם יוצא מע"מ לתשלום, משלמים דרך האתר או הבנק לפי ההוראות בטופס. אם יוצא לקבל, אין לשלם.', 'לשמור את אישור ההגשה ואת אסמכתת התשלום, ולסמן כאן "בוצע".'],
-  adv: ['לבדוק באזור האישי באתר רשות המסים מה הסכום והמועד של מקדמת מס ההכנסה שנקבעה לך.', 'לשלם דרך האתר, אפליקציית הבנק או כרטיס אשראי.', 'לשמור אסמכתא בתיקיית החודש, ולסמן כאן "בוצע".', 'אם ההכנסה שלך שונה מאוד ממה שהוערך, לדבר עם רואה החשבון על עדכון המקדמות.'],
-  bl: ['לבדוק באתר הביטוח הלאומי, באזור האישי, את הסכום והמועד של דמי הביטוח כעצמאי.', 'לשלם דרך האתר, הבנק או בהוראת קבע.', 'לשמור אסמכתא ולסמן כאן "בוצע".', 'אם יש שינוי במצבך (אבטלה, חזרה לעבודה כשכיר), לדווח על כך לביטוח הלאומי.'],
+  vat: ['לוודא שכל החשבוניות שהוצאת ושכל חשבוניות ההוצאות של התקופה הוזנו באפליקציה.', 'במסך "דיווחים" לבחור את התקופה. המספרים מוכנים שם להעתקה.', 'להיכנס לאתר רשות המסים, לאזור האישי של העוסק, ולדיווח מע"מ מקוון. בפעם הראשונה כדאי לעשות זאת יחד עם רואה החשבון.', 'להזין: עסקאות חייבות (נטו), מע"מ עסקאות, ותשומות (נטו ומע"מ). שמות השדות בטופס עשויים להיות מעט שונים.', 'אם לא היו עסקאות בתקופה, מגישים "דוח אפס" ולא מדלגים.', 'אם יוצא מע"מ לתשלום, משלמים דרך האתר או הבנק לפי ההוראות בטופס. אם יוצא לקבל, אין לשלם.', 'לשמור את אישור ההגשה ואת אסמכתת התשלום, לתעד את התשלום במסך "כסף", ולסמן כאן "בוצע".'],
+  adv: ['לבדוק באזור האישי באתר רשות המסים מה הסכום והמועד של מקדמת מס ההכנסה שנקבעה לך.', 'לשלם דרך האתר, אפליקציית הבנק או כרטיס אשראי.', 'לשמור אסמכתא בתיקיית החודש, לתעד את התשלום במסך "כסף", ולסמן כאן "בוצע".', 'אם ההכנסה שלך שונה מאוד ממה שהוערך, לדבר עם רואה החשבון על עדכון המקדמות.'],
+  bl: ['לבדוק באתר הביטוח הלאומי, באזור האישי, את הסכום והמועד של דמי הביטוח כעצמאי.', 'לשלם דרך האתר, הבנק או בהוראת קבע.', 'לשמור אסמכתא, לתעד את התשלום במסך "כסף", ולסמן כאן "בוצע".', 'אם יש שינוי במצבך (אבטלה, חזרה לעבודה כשכיר), לדווח על כך לביטוח הלאומי.'],
   hrs: ['לסכם את שעות החודש לפי היומן.', 'לשלוח את הסיכום למנהל המרפאה לאישור, ועדיף בכתב.', 'לסמן באפליקציה "אושר" ליד השעות שאושרו.', 'לשמור את האישור. התשלום תלוי בו.'],
   pay: ['לבדוק שהתשלום נכנס לחשבון העסק.', 'להשוות לפירוט שכללית שלחה על חישוב התמורה.', 'להוציא חשבונית מס כדין בתוכנת החשבוניות, תוך שבועיים מקבלת התשלום (לפי ההסכם).', 'לתעד באפליקציה במסך "חשבוניות" ולשמור עותק PDF.', 'אם הסכום שונה ממה שצפית, להגיש השגה להנהלת המחוז בכתב תוך 180 יום.'],
   ann: ['הדוח השנתי למס הכנסה נעשה עם רואה החשבון.', 'להעביר לו את הייצוא של השנה (יומן שעות, חשבוניות, הוצאות עם תמונות) ואישור ניכוי מס במקור מכללית.', 'לשאול על הוצאות שנשארו פתוחות (רכב, חדר בבית).'],
@@ -200,7 +214,7 @@ function parseInvoice(text, vatPct) {
 }
 
 /* ---------- ממשק ---------- */
-const TABS = [['home', '🏠', 'היום'], ['hours', '⏱', 'שעות'], ['exp', '🧾', 'הוצאות'], ['inv', '📄', 'חשבוניות'], ['rep', '📅', 'דיווחים'], ['set', '⚙️', 'עוד']];
+const TABS = [['home', '🏠', 'היום'], ['hours', '⏱', 'שעות'], ['exp', '🧾', 'הוצאות'], ['inv', '💰', 'כסף'], ['rep', '📅', 'דיווחים'], ['set', '⚙️', 'עוד']];
 const S = { tab: 'home', month: todayStr().slice(0, 7), form: null, guide: null, rep: null };
 const CATS = { 'ביטוח אחריות מקצועית': [100, 100], 'דמי חבר ארגון מקצועי': [100, 100], 'השתלמויות וכנסים': [100, 100], 'ספרות מקצועית ומנויים': [100, 100], 'ציוד רפואי קטן': [100, 100], 'תוכנה ומנויים': [100, 100], 'רואה חשבון והנהלת חשבונות': [100, 100], 'עמלות בנק': [0, 100], 'ציוד משרדי': [100, 100], 'טלפון ואינטרנט (לשאול רו"ח)': [0, 0], 'רכב ודלק (לשאול רו"ח)': [0, 0], 'חדר בבית (לשאול רו"ח)': [0, 0], 'נסיעות ציבוריות/חניה': [100, 100], 'אחר (לשאול רו"ח)': [0, 0] };
 const main = () => $('#main');
@@ -242,6 +256,7 @@ function viewHome() {
     <tr><td>פחות הפרשה למס וביטוח לאומי (הערכה)</td><td class="n">${money(-mc.setAside)}</td></tr>
     <tr><td><b>נשאר לך (הערכה)</b></td><td class="n"><b>${money(mc.left)}</b></td></tr></table>
     <div class="mut">מע"מ שאתה גובה אינו מופיע כאן, כי הוא לא שלך. תשלום משוער ב-${fmtDate(mc.pay)}.</div>
+    <div style="margin-top:8px"><button class="btn sec sm" data-tab-go="inv">להעביר לחשבון שלי: ${money(cashCalc().can)}</button></div>
     ${mc.hOral ? `<div class="mut" style="margin-top:6px">בנוסף, <b>${r2(mc.hOral)} שעות</b> נסיעה/ברצף שלא אושרו בכתב (פוטנציאל כ-${money(mc.oralNet)})</div>` : ''}</div>
   ${unapproved ? `<div class="note warn">יש ${unapproved} משמרות ללא אישור מהמנהל מלפני יותר משלושה ימים. כדאי לבקש אישור.</div>` : ''}
   <div class="card"><h2>מה לעשות בקרוב</h2>${evHtml}</div>
@@ -292,6 +307,7 @@ function expForm(e) {
   <label>חשבונית מס על שם העסק שלי?</label><select id="f_has"><option value="1" ${e.hasInvoice ? 'selected' : ''}>כן</option><option value="0" ${!e.hasInvoice ? 'selected' : ''}>לא (קבלה בלבד, או חשבונית על שם אחר)</option></select>
   <label>סכום ששולם כולל מע"מ</label><input id="f_tot" inputmode="decimal" value="${e.total}">
   <div class="row"><div><label>שיעור מע"מ בחשבונית %</label><input id="f_rate" inputmode="decimal" value="${e.vatRate}"></div><div><label>% מע"מ לקיזוז</label><input id="f_vp" inputmode="decimal" value="${e.vatPct}"></div><div><label>% הוכר למס הכנסה</label><input id="f_rp" inputmode="decimal" value="${e.recogPct}"></div></div>
+  <label>שולם מחשבון העסק?</label><select id="f_biz"><option value="1" ${e.fromBiz !== false ? 'selected' : ''}>כן</option><option value="0" ${e.fromBiz === false ? 'selected' : ''}>לא (שולם מחשבון פרטי)</option></select>
   <label>הערות / לשאול רו"ח</label><input id="f_note" value="${esc(e.note)}">
   <div id="calcline" class="mut" style="margin:8px 0"></div>
   <div class="row"><button class="btn" data-act="saveExp" data-id="${e.id || ''}">שמור</button><button class="btn sec" data-act="cancel">ביטול</button>${e.id ? `<button class="btn danger" data-act="delExp" data-id="${e.id}">מחק</button>` : ''}</div></div>`;
@@ -344,12 +360,37 @@ function invForm(i) {
   <label>תאריך שהכסף נכנס</label><input type="date" id="f_paid" value="${i.paidDate || ''}">
   <div class="row" style="margin-top:12px"><button class="btn" data-act="saveInv" data-id="${i.id || ''}">שמור</button><button class="btn sec" data-act="cancel">ביטול</button>${i.id ? `<button class="btn danger" data-act="delInv" data-id="${i.id}">מחק</button>` : ''}</div></div>`;
 }
+function moveForm() {
+  return `<div class="card"><h2>תיעוד תנועה בחשבון העסק</h2>
+  <label>סוג</label><select id="m_type">${Object.entries(MOVE_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+  <label>תאריך</label><input type="date" id="m_date" value="${todayStr()}">
+  <label>סכום</label><input id="m_amt" inputmode="decimal">
+  <label>הערה</label><input id="m_note">
+  <div class="row" style="margin-top:12px"><button class="btn" data-act="saveMove">שמור</button><button class="btn sec" data-act="cancel">ביטול</button></div></div>`;
+}
+function cashCard() {
+  const c = cashCalc(), last = [...D.moves].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+  return `<div class="card"><h2>כמה אפשר להעביר לחשבון שלי</h2>
+  <div class="big">${money(c.can)}</div>
+  <table style="margin-top:8px"><tr><td>יתרה בחשבון העסק ${c.hasBank ? '(כפי שהזנת)' : '(מחושבת)'}</td><td class="n">${money(c.balance)}</td></tr>
+  <tr><td>פחות מע"מ שעוד לא שולם</td><td class="n">${money(-c.vatOwed)}</td></tr>
+  <tr><td>פחות הפרשה למס הכנסה וביטוח לאומי (הערכה)</td><td class="n">${money(-c.taxRes)}</td></tr>
+  <tr><td>פחות כרית ביטחון</td><td class="n">${money(-D.st.buffer)}</td></tr></table>
+  <label for="bal">יתרה בבנק עכשיו (מומלץ לעדכן לפני כל העברה)</label>
+  <div class="row"><input id="bal" inputmode="decimal" value="${D.bank != null ? D.bank.amount : ''}" placeholder="${money(c.computed)}"><button class="btn sec" data-act="setBal" style="flex:0">עדכן</button></div>
+  ${D.bank != null && Math.abs(D.bank.amount - c.computed) > 1 ? `<div class="note warn">היתרה שהזנת שונה מהמחושבת (${money(c.computed)}). כנראה חסר תיעוד של תנועה, או הוצאה שלא שולמה מחשבון העסק.</div>` : ''}
+  ${c.can === 0 ? '<div class="note">כרגע אין מה להעביר. התשלום הראשון מכללית מגיע כ-45 יום אחרי סוף החודש הראשון.</div>' : ''}
+  <div class="note">זו הערכה זהירה. ההפרשה למס היא אחוז קבוע שלי ולא מספרי הרשות, ולכן ההעברה בפועל כדאי שתהיה קטנה מהסכום או שווה לו, ולא גדולה ממנו. הוצאות שהזנת נחשבות כמשולמות מחשבון העסק, אלא אם סימנת אחרת.</div>
+  <button class="btn" data-act="newMove" style="width:100%">+ תיעוד העברה או תשלום</button>
+  ${last.length ? `<div style="margin-top:8px">${last.map(m => `<div class="item"><div class="l"><b>${MOVE_TYPES[m.type]}</b><div class="mut">${fmtDate(m.date)} ${esc(m.note || '')}</div></div><div class="r"><b>${money(m.amount)}</b><div><button class="btn danger sm" data-act="delMove" data-id="${m.id}">מחק</button></div></div></div>`).join('')}</div>` : ''}</div>`;
+}
 function viewInv() {
   if (S.form && S.form.kind === 'inv') return invForm(S.form.data);
+  if (S.form && S.form.kind === 'move') return moveForm();
   const list = [...D.invoices].sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate));
   const pend = [];
   for (let i = -6; i <= 0; i++) { const k = addMonths(todayStr().slice(0, 7), i), mc = monthCalc(k); if (!mc.inv && (mc.hApproved > 0)) pend.push([k, mc]); }
-  return `<button class="btn" data-act="newInv" style="width:100%;margin-bottom:12px">+ תיעוד חשבונית שהוצאתי</button>
+  return cashCard() + `<button class="btn" data-act="newInv" style="width:100%;margin-bottom:12px">+ תיעוד חשבונית שהוצאתי</button>
   ${pend.length ? `<div class="card"><h2>עוד לא הוצאת חשבונית</h2>${pend.map(([k, mc]) => `<div class="item"><div class="l"><b>${mLabel(k)}</b><div class="mut">צפוי ${money(mc.net)} + מע"מ · תשלום ב-${fmtDate(mc.pay)}</div></div><div class="r"><button class="btn sec sm" data-act="invFor" data-id="${k}">תעד</button></div></div>`).join('')}</div>` : ''}
   <div class="card"><h2>חשבוניות שהוצאתי</h2>${list.length ? list.map(i => `<div class="item" data-act="editInv" data-id="${i.id}" role="button" tabindex="0"><div class="l"><b>${i.invoiceNo ? 'מס׳ ' + esc(i.invoiceNo) : 'חשבונית'}</b><div class="mut">${mLabel(i.forMonth)} · ${fmtDate(i.invoiceDate)}</div></div><div class="r"><b>${money(i.net * (1 + D.st.vat / 100))}</b><div class="mut">נטו ${money(i.net)}</div>${(() => { const ex = monthCalc(i.forMonth).net, df = i.net - ex; return ex > 0 && Math.abs(df) > 0.5 ? `<span class="pill warn">שונה מהצפוי ב-${money(df)}</span>` : ''; })()}</div></div>`).join('') : '<p class="mut">עדיין אין.</p>'}</div>
   <div class="note">החשבונית עצמה מוצאת בתוכנת חשבוניות מוכרת, כי היא חייבת לכלול מספר הקצאה ופרטים לפי החוק. כאן מתעדים אותה כדי שהמע"מ יחושב.</div>`;
@@ -383,7 +424,7 @@ function viewRep() {
 /* --- הגדרות --- */
 function viewSet() {
   const s = D.st, f = (id, label, v, extra = '') => `<label for="s_${id}">${label}</label><input id="s_${id}" inputmode="decimal" value="${v}" ${extra}>`;
-  return `<div class="card"><h2>תעריפים</h2>${f('rate', 'תעריף לשעה לפני מע"מ', s.rate)}${f('ovh', 'תקורה % (15 או 25, לברר איזה נספח תקף)', s.ovh)}${f('vat', 'מע"מ %', s.vat)}${f('credit', 'ימי אשראי אחרי סוף החודש', s.credit)}${f('setAside', 'הפרשה למס ולביטוח לאומי % (הערכה גסה)', s.setAside)}</div>
+  return `<div class="card"><h2>תעריפים</h2>${f('rate', 'תעריף לשעה לפני מע"מ', s.rate)}${f('ovh', 'תקורה % (15 או 25, לברר איזה נספח תקף)', s.ovh)}${f('vat', 'מע"מ %', s.vat)}${f('credit', 'ימי אשראי אחרי סוף החודש', s.credit)}${f('setAside', 'הפרשה למס ולביטוח לאומי % (הערכה גסה)', s.setAside)}${f('buffer', 'כרית ביטחון שתישאר תמיד בחשבון העסק (₪)', s.buffer)}</div>
   <div class="card"><h2>דיווחים</h2><label for="s_vatPeriod">תדירות דיווח מע"מ</label><select id="s_vatPeriod"><option value="1" ${s.vatPeriod === 1 ? 'selected' : ''}>חודשי</option><option value="2" ${s.vatPeriod === 2 ? 'selected' : ''}>דו-חודשי</option></select>
   <label for="s_vatStart">בדו-חודשי: החודש הראשון בכל תקופה</label><select id="s_vatStart"><option value="1" ${s.vatStart === 1 ? 'selected' : ''}>ינואר-פברואר, מרץ-אפריל...</option><option value="2" ${s.vatStart === 2 ? 'selected' : ''}>פברואר-מרץ, אפריל-מאי...</option></select>
   ${f('vatDay', 'יום בחודש להגשת מע"מ (לאמת)', s.vatDay)}${f('advDay', 'יום בחודש למקדמות מס הכנסה (לאמת)', s.advDay)}${f('blDay', 'יום בחודש לביטוח לאומי (לאמת)', s.blDay)}
@@ -420,7 +461,7 @@ async function act(a, el) {
     case 'newExp': S.form = { kind: 'exp' }; break;
     case 'editExp': S.form = { kind: 'exp', data: D.expenses.find(e => e.id == id), image: D.expenses.find(e => e.id == id).image }; break;
     case 'saveExp': {
-      const o = { date: val('f_date'), supplier: val('f_sup'), desc: val('f_desc'), category: val('f_cat'), invNo: val('f_inv'), hasInvoice: val('f_has') === '1', total: num(val('f_tot')), vatRate: num(val('f_rate')), vatPct: num(val('f_vp')), recogPct: num(val('f_rp')), note: val('f_note'), image: S.form.image || (S.form.data && S.form.data.image) || null };
+      const o = { date: val('f_date'), supplier: val('f_sup'), desc: val('f_desc'), category: val('f_cat'), invNo: val('f_inv'), hasInvoice: val('f_has') === '1', total: num(val('f_tot')), vatRate: num(val('f_rate')), vatPct: num(val('f_vp')), recogPct: num(val('f_rp')), note: val('f_note'), fromBiz: val('f_biz') !== '0', image: S.form.image || (S.form.data && S.form.data.image) || null };
       if (!o.date || !o.total) return toast('חסרים תאריך או סכום');
       if (id) o.id = Number(id); await dbPut('expenses', o); await load(); S.form = null; S.month = o.date.slice(0, 7); toast('נשמר'); break;
     }
@@ -433,6 +474,14 @@ async function act(a, el) {
       if (!o.forMonth || !o.invoiceDate || !o.net) return toast('חסרים חודש, תאריך או סכום');
       if (id) o.id = Number(id); await dbPut('invoices', o); await load(); S.form = null; toast('נשמר'); break;
     }
+    case 'newMove': S.form = { kind: 'move' }; break;
+    case 'saveMove': {
+      const o = { type: val('m_type'), date: val('m_date'), amount: num(val('m_amt')), note: val('m_note') };
+      if (!o.date || !(o.amount > 0)) return toast('חסרים תאריך או סכום');
+      await dbPut('moves', o); await load(); S.form = null; toast('נשמר'); break;
+    }
+    case 'delMove': if (confirm('למחוק את התנועה?')) { await dbDel('moves', Number(id)); await load(); } break;
+    case 'setBal': { const v = val('bal').trim(); if (v === '') { await rq(tx('kv', 'readwrite').delete('bank')); D.bank = null; } else { D.bank = { amount: num(v), date: todayStr() }; await kvSet('bank', D.bank); } toast('עודכן'); break; }
     case 'delInv': if (confirm('למחוק?')) { await dbDel('invoices', Number(id)); await load(); S.form = null; } break;
     case 'guide': { const ev = upcoming(todayStr(), 30).find(e => e.id === id); S.guide = ev ? { ...ev } : { kind: el.dataset.kind || 'vat', id }; S.tab = 'rep'; break; }
     case 'done': D.done[id] = !D.done[id]; await kvSet('done', D.done); S.guide = null; toast(D.done[id] ? 'סומן כבוצע' : 'בוטל'); break;
@@ -443,12 +492,12 @@ async function act(a, el) {
     case 'ics': exportIcs(); return;
     case 'saveSet': {
       const n = { ...D.st };
-      ['rate', 'ovh', 'vat', 'credit', 'setAside', 'vatDay', 'advDay', 'blDay'].forEach(k => n[k] = num(val('s_' + k)));
+      ['rate', 'ovh', 'vat', 'credit', 'setAside', 'buffer', 'vatDay', 'advDay', 'blDay'].forEach(k => n[k] = num(val('s_' + k)));
       n.vatPeriod = Number(val('s_vatPeriod')); n.vatStart = Number(val('s_vatStart')); n.annual = val('s_annual');
       D.st = n; await kvSet('settings', n); S.rep = null; toast('נשמר'); break;
     }
     case 'export': await exportBackup(); return;
-    case 'wipe': if (confirm('למחוק את כל הנתונים מהמכשיר? אי אפשר לשחזר בלי גיבוי.') && confirm('בטוח?')) { for (const s of ['shifts', 'expenses', 'invoices', 'custom']) for (const r of await dbAll(s)) await dbDel(s, r.id); for (const k of ['settings', 'active', 'done', 'lastBackup', 'started']) await rq(tx('kv', 'readwrite').delete(k)); await load(); toast('נמחק'); } break;
+    case 'wipe': if (confirm('למחוק את כל הנתונים מהמכשיר? אי אפשר לשחזר בלי גיבוי.') && confirm('בטוח?')) { for (const s of ['shifts', 'expenses', 'invoices', 'custom', 'moves']) for (const r of await dbAll(s)) await dbDel(s, r.id); for (const k of ['settings', 'active', 'done', 'lastBackup', 'started', 'bank']) await rq(tx('kv', 'readwrite').delete(k)); await load(); toast('נמחק'); } break;
   }
   render();
 }
@@ -469,7 +518,7 @@ function exportIcs() {
 function dl(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); }
 const b2d = b => new Promise(res => { if (!b) return res(null); const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(b); });
 async function exportBackup() {
-  const data = { v: 1, at: new Date().toISOString(), st: D.st, shifts: D.shifts, invoices: D.invoices, custom: D.custom, done: D.done, expenses: [] };
+  const data = { v: 1, at: new Date().toISOString(), st: D.st, shifts: D.shifts, invoices: D.invoices, custom: D.custom, moves: D.moves, bank: D.bank, done: D.done, expenses: [] };
   for (const e of D.expenses) data.expenses.push({ ...e, image: await b2d(e.image) });
   dl(new Blob([JSON.stringify(data)], { type: 'application/json' }), `backup-${todayStr()}.json`);
   D.lastBackup = todayStr(); await kvSet('lastBackup', D.lastBackup); toast('הגיבוי יוצא'); render();
@@ -477,14 +526,16 @@ async function exportBackup() {
 async function importBackup(file) {
   const d = JSON.parse(await file.text()); if (!d || d.v !== 1) return toast('קובץ לא תקין');
   if (!confirm('השחזור יחליף את הנתונים הקיימים. להמשיך?')) return;
-  for (const s of ['shifts', 'expenses', 'invoices', 'custom']) for (const r of await dbAll(s)) await dbDel(s, r.id);
-  for (const s of ['shifts', 'invoices', 'custom']) for (const r of d[s] || []) await dbPut(s, r);
+  for (const s of ['shifts', 'expenses', 'invoices', 'custom', 'moves']) for (const r of await dbAll(s)) await dbDel(s, r.id);
+  for (const s of ['shifts', 'invoices', 'custom', 'moves']) for (const r of d[s] || []) await dbPut(s, r);
+  if (d.bank) await kvSet('bank', d.bank);
   for (const e of d.expenses || []) { if (e.image) e.image = await (await fetch(e.image)).blob(); await dbPut('expenses', e); }
   await kvSet('settings', d.st || {}); await kvSet('done', d.done || {}); await load(); toast('שוחזר'); render();
 }
 
 /* ---------- הפעלה ---------- */
 document.addEventListener('click', e => {
+  const tg = e.target.closest('[data-tab-go]'); if (tg) { S.tab = tg.dataset.tabGo; S.form = null; render(); return; }
   const tb = e.target.closest('[data-tab]'); if (tb) { S.tab = tb.dataset.tab; S.form = null; S.guide = null; render(); return; }
   const a = e.target.closest('[data-act]'); if (a) act(a.dataset.act, a);
 });

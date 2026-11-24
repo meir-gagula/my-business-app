@@ -55,6 +55,7 @@ function shiftHours(s) {
   const m = (c * 60 + d) - (a * 60 + b);
   return m > 0 ? m / 60 : 0;
 }
+const isOral = s => s.type === 'נסיעה' || (s.type || '').startsWith('ברצף');
 function expCalc(e) {
   const rate = (e.vatRate ?? 18) / 100;
   const total = e.total || 0;
@@ -66,14 +67,16 @@ function expCalc(e) {
 function monthCalc(key) {
   const st = D.st;
   const sh = D.shifts.filter(s => s.date.startsWith(key));
-  const hApproved = sh.filter(s => s.approved).reduce((a, s) => a + shiftHours(s), 0);
-  const hPending = sh.filter(s => !s.approved).reduce((a, s) => a + shiftHours(s), 0);
+  const hApproved = sh.filter(s => s.approved && !isOral(s)).reduce((a, s) => a + shiftHours(s), 0);
+  const hPending = sh.filter(s => !s.approved && !isOral(s)).reduce((a, s) => a + shiftHours(s), 0);
+  const hOral = sh.filter(isOral).reduce((a, s) => a + shiftHours(s), 0);
+  const oralNet = hOral * st.rate * (1 - st.ovh / 100);
   const gross = hApproved * st.rate, ovh = gross * st.ovh / 100, net = gross - ovh, vat = net * st.vat / 100;
   const ex = D.expenses.filter(e => e.date.startsWith(key));
   const recog = ex.reduce((a, e) => a + expCalc(e).recog, 0);
   const inVat = ex.reduce((a, e) => a + expCalc(e).rec, 0);
   const setAside = Math.max(0, net - recog) * st.setAside / 100;
-  return { hApproved, hPending, gross, ovh, net, vat, total: net + vat, recog, inVat, setAside, pay: addDays(endOfMonth(key), st.credit), inv: D.invoices.find(i => i.forMonth === key) };
+  return { hApproved, hPending, hOral, oralNet, gross, ovh, net, vat, total: net + vat, recog, inVat, setAside, pay: addDays(endOfMonth(key), st.credit), inv: D.invoices.find(i => i.forMonth === key) };
 }
 function periodMonths(key) {
   const st = D.st;
@@ -225,7 +228,8 @@ function viewHome() {
   </div>
   <div class="card"><h2>${mLabel(t.slice(0, 7))} עד עכשיו</h2>
     <div class="row"><div><div class="mut">שעות מאושרות</div><div class="big">${r2(mc.hApproved)}</div></div><div><div class="mut">ממתינות לאישור</div><div class="big">${r2(mc.hPending)}</div></div></div>
-    <div class="mut" style="margin-top:8px">צפוי נטו לפני מע"מ: <b>${money(mc.net)}</b> · תשלום משוער ב-${fmtDate(mc.pay)}</div></div>
+    <div class="mut" style="margin-top:8px">צפוי נטו לפני מע"מ: <b>${money(mc.net)}</b> · תשלום משוער ב-${fmtDate(mc.pay)}</div>
+    ${mc.hOral ? `<div class="mut" style="margin-top:6px">בנוסף, <b>${r2(mc.hOral)} שעות</b> נסיעה/ברצף שלא אושרו בכתב (פוטנציאל כ-${money(mc.oralNet)})</div>` : ''}</div>
   ${unapproved ? `<div class="note warn">יש ${unapproved} משמרות ללא אישור מהמנהל מלפני יותר משלושה ימים. כדאי לבקש אישור.</div>` : ''}
   <div class="card"><h2>מה לעשות בקרוב</h2>${evHtml}</div>
   <div class="note">התזכורות כאן מופיעות כשהאפליקציה פתוחה. כדי לקבל התראה גם כשהיא סגורה, ייצא אותן ליומן הטלפון במסך "דיווחים".</div>`;
@@ -247,9 +251,17 @@ function viewHours() {
   if (S.form && S.form.kind === 'shift') return shiftForm(S.form.data);
   const list = D.shifts.filter(s => s.date.startsWith(S.month)).sort((a, b) => (b.date + b.start).localeCompare(a.date + a.start));
   const mc = monthCalc(S.month);
+  const dayTot = {}; list.forEach(s => dayTot[s.date] = (dayTot[s.date] || 0) + shiftHours(s));
+  let lastDay = '';
+  const rows = list.map(s => {
+    const head = s.date !== lastDay ? `<div class="mut" style="padding-top:10px"><b>${fmtDate(s.date)}</b> · סה"כ ביום ${r2(dayTot[s.date])} ש'</div>` : ''; lastDay = s.date;
+    const pill = isOral(s) ? '<span class="pill bad">לא אושר בכתב</span>' : `<span class="pill ${s.approved ? 'ok' : 'warn'}">${s.approved ? 'אושר' : 'ממתין'}</span>`;
+    return head + `<div class="item" data-act="editShift" data-id="${s.id}" role="button" tabindex="0"><div class="l">${esc(s.clinic)}<div class="mut">${s.start}–${s.end || '...'} · ${esc(s.type)}</div></div><div class="r"><b>${r2(shiftHours(s))}</b> ש'<div>${pill}</div></div></div>`;
+  }).join('');
   return monthNav() + `<button class="btn" data-act="newShift" style="width:100%;margin-bottom:12px">+ הוספת משמרת ידנית</button>
-  <div class="card"><div class="row"><div><div class="mut">מאושרות</div><b>${r2(mc.hApproved)} שעות</b></div><div><div class="mut">ממתינות</div><b>${r2(mc.hPending)} שעות</b></div></div></div>
-  <div class="card">${list.length ? list.map(s => `<div class="item" data-act="editShift" data-id="${s.id}" role="button" tabindex="0"><div class="l"><b>${fmtDate(s.date)}</b> ${esc(s.clinic)}<div class="mut">${s.start}–${s.end || '...'} · ${esc(s.type)}</div></div><div class="r"><b>${r2(shiftHours(s))}</b> ש'<div><span class="pill ${s.approved ? 'ok' : 'warn'}">${s.approved ? 'אושר' : 'ממתין'}</span></div></div></div>`).join('') : '<p class="mut">אין משמרות בחודש הזה.</p>'}</div>`;
+  <div class="card"><div class="row"><div><div class="mut">מאושרות</div><b>${r2(mc.hApproved)} שעות</b></div><div><div class="mut">ממתינות לאישור</div><b>${r2(mc.hPending)} שעות</b></div></div>
+  ${mc.hOral ? `<div class="note warn" style="margin-bottom:0">נסיעות ותשלום ברצף שלא אושרו בכתב: <b>${r2(mc.hOral)} שעות</b>. אם יאושרו באותו תעריף, זה כ-${money(mc.oralNet)} נטו נוסף. הן לא נכללות בהכנסה הצפויה.</div>` : ''}</div>
+  <div class="card">${list.length ? rows : '<p class="mut">אין משמרות בחודש הזה.</p>'}</div>`;
 }
 
 /* --- הוצאות --- */
@@ -326,7 +338,7 @@ function viewInv() {
   for (let i = -6; i <= 0; i++) { const k = addMonths(todayStr().slice(0, 7), i), mc = monthCalc(k); if (!mc.inv && (mc.hApproved > 0)) pend.push([k, mc]); }
   return `<button class="btn" data-act="newInv" style="width:100%;margin-bottom:12px">+ תיעוד חשבונית שהוצאתי</button>
   ${pend.length ? `<div class="card"><h2>עוד לא הוצאת חשבונית</h2>${pend.map(([k, mc]) => `<div class="item"><div class="l"><b>${mLabel(k)}</b><div class="mut">צפוי ${money(mc.net)} + מע"מ · תשלום ב-${fmtDate(mc.pay)}</div></div><div class="r"><button class="btn sec sm" data-act="invFor" data-id="${k}">תעד</button></div></div>`).join('')}</div>` : ''}
-  <div class="card"><h2>חשבוניות שהוצאתי</h2>${list.length ? list.map(i => `<div class="item" data-act="editInv" data-id="${i.id}" role="button" tabindex="0"><div class="l"><b>${i.invoiceNo ? 'מס׳ ' + esc(i.invoiceNo) : 'חשבונית'}</b><div class="mut">${mLabel(i.forMonth)} · ${fmtDate(i.invoiceDate)}</div></div><div class="r"><b>${money(i.net * (1 + D.st.vat / 100))}</b><div class="mut">נטו ${money(i.net)}</div></div></div>`).join('') : '<p class="mut">עדיין אין.</p>'}</div>
+  <div class="card"><h2>חשבוניות שהוצאתי</h2>${list.length ? list.map(i => `<div class="item" data-act="editInv" data-id="${i.id}" role="button" tabindex="0"><div class="l"><b>${i.invoiceNo ? 'מס׳ ' + esc(i.invoiceNo) : 'חשבונית'}</b><div class="mut">${mLabel(i.forMonth)} · ${fmtDate(i.invoiceDate)}</div></div><div class="r"><b>${money(i.net * (1 + D.st.vat / 100))}</b><div class="mut">נטו ${money(i.net)}</div>${(() => { const ex = monthCalc(i.forMonth).net, df = i.net - ex; return ex > 0 && Math.abs(df) > 0.5 ? `<span class="pill warn">שונה מהצפוי ב-${money(df)}</span>` : ''; })()}</div></div>`).join('') : '<p class="mut">עדיין אין.</p>'}</div>
   <div class="note">החשבונית עצמה מוצאת בתוכנת חשבוניות מוכרת, כי היא חייבת לכלול מספר הקצאה ופרטים לפי החוק. כאן מתעדים אותה כדי שהמע"מ יחושב.</div>`;
 }
 
